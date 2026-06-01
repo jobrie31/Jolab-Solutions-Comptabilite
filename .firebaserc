@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "test-36f40"
+  },
+  "targets": {
+    "test-36f40": {
+      "hosting": {
+        "jolab-solutions-comptabilite": [
+          "jolab-solutions-comptabilite"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
