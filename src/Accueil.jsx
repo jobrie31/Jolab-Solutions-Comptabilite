@@ -9,11 +9,14 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 
+import SidebarCompta from "./SidebarCompta";
 import Clients from "./Clients";
 import Factures from "./Factures";
 import Depenses from "./Depenses";
-import Paiements from "./Paiements";
 import Resume from "./Resume";
+import HistoriqueClients from "./HistoriqueClients";
+import InstallerApplication from "./InstallerApplication";
+import BoutonNotifications from "./BoutonNotifications";
 
 const ACCOUNTING_APP_ID = "jolab-solutions-comptabilite";
 
@@ -50,12 +53,59 @@ function getMonthsOfYear(year) {
   });
 }
 
+function monthNameFromKey(monthKey) {
+  const [, monthText] = String(monthKey || currentMonth()).split("-");
+  const monthIndex = Number(monthText || 1) - 1;
+
+  const labels = [
+    "Janv.",
+    "Févr.",
+    "Mars",
+    "Avril",
+    "Mai",
+    "Juin",
+    "Juill.",
+    "Août",
+    "Sept.",
+    "Oct.",
+    "Nov.",
+    "Déc.",
+  ];
+
+  return labels[monthIndex] || monthKey;
+}
+
 function createId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
     return crypto.randomUUID();
   }
 
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function calculerPrixAvecRabais(
+  montantBase,
+  rabaisBienvenue = false,
+  rabaisAnnuel = false
+) {
+  const prixBase = Number(montantBase || 0);
+  const pourcentageRabais =
+    (rabaisBienvenue ? 10 : 0) + (rabaisAnnuel ? 15 : 0);
+
+  const montantRabais = Number(
+    ((prixBase * pourcentageRabais) / 100).toFixed(2)
+  );
+
+  const montantFinal = Number((prixBase - montantRabais).toFixed(2));
+
+  return {
+    prixBase,
+    rabaisBienvenue: Boolean(rabaisBienvenue),
+    rabaisAnnuel: Boolean(rabaisAnnuel),
+    pourcentageRabais,
+    montantRabais,
+    montantFinal,
+  };
 }
 
 function getLastDayOfMonth(year, monthIndexZeroBased) {
@@ -163,6 +213,11 @@ function Accueil() {
     personne: "Nom de la personne",
     applicationNom: "Application / service",
     montant: 0,
+    prixBase: 0,
+    rabaisBienvenue: false,
+    rabaisAnnuel: false,
+    pourcentageRabais: 0,
+    montantRabais: 0,
     date: todayDate(),
     description: "Services professionnels",
     statut: "Aperçu seulement",
@@ -174,15 +229,6 @@ function Accueil() {
     montant: "",
     date: todayDate(),
     categorie: "Général",
-    recurrence: "unique",
-    moyenPaiement: "",
-  });
-
-  const [paiementForm, setPaiementForm] = useState({
-    client: "",
-    montant: "",
-    date: todayDate(),
-    note: "",
     recurrence: "unique",
     moyenPaiement: "",
   });
@@ -326,6 +372,22 @@ function Accueil() {
     };
   }, [factures, depenses, paiements, moisActif]);
 
+  const moisDisponibles = useMemo(() => {
+    return getMonthsOfYear(stats.anneeActive);
+  }, [stats.anneeActive]);
+
+  function changerAnnee(direction) {
+    const year = Number(stats.anneeActive || new Date().getFullYear());
+    const [, month] = moisActif.split("-");
+    const nextYear = year + direction;
+
+    setMoisActif(`${nextYear}-${month || "01"}`);
+  }
+
+  function actualiserApplication() {
+    window.location.reload();
+  }
+
   async function ajouterClient(e) {
     e.preventDefault();
 
@@ -341,6 +403,7 @@ function Accueil() {
       email: clientForm.email.trim(),
       notes: clientForm.notes.trim(),
       applications: [],
+      clientFerme: false,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -352,6 +415,21 @@ function Accueil() {
       email: "",
       notes: "",
     });
+  }
+
+  async function fermerClient(clientId) {
+    if (!clientId) {
+      alert("Client introuvable.");
+      return;
+    }
+
+    await updateDoc(doc(db, "apps", ACCOUNTING_APP_ID, "clients", clientId), {
+      clientFerme: true,
+      dateFermeture: new Date().toISOString(),
+      updatedAt: serverTimestamp(),
+    });
+
+    setPage("historique");
   }
 
   async function ajouterApplicationClient(clientId, applicationForm) {
@@ -374,11 +452,22 @@ function Accueil() {
 
     const applicationId = createId();
 
+    const prix = calculerPrixAvecRabais(
+      applicationForm.montant,
+      applicationForm.rabaisBienvenue,
+      applicationForm.rabaisAnnuel
+    );
+
     const nouvelleApplication = {
       id: applicationId,
       nomApplication: applicationForm.nomApplication.trim(),
       dateOuverture: applicationForm.dateOuverture || todayDate(),
-      montant: Number(applicationForm.montant || 0),
+      prixBase: prix.prixBase,
+      montant: prix.montantFinal,
+      rabaisBienvenue: prix.rabaisBienvenue,
+      rabaisAnnuel: prix.rabaisAnnuel,
+      pourcentageRabais: prix.pourcentageRabais,
+      montantRabais: prix.montantRabais,
       datePaiement:
         applicationForm.datePaiement ||
         applicationForm.dateOuverture ||
@@ -403,7 +492,12 @@ function Accueil() {
       clientPersonne: client.personne || "",
       applicationId,
       applicationNom: nouvelleApplication.nomApplication,
-      montant: Number(nouvelleApplication.montant || 0),
+      prixBase: prix.prixBase,
+      montant: prix.montantFinal,
+      rabaisBienvenue: prix.rabaisBienvenue,
+      rabaisAnnuel: prix.rabaisAnnuel,
+      pourcentageRabais: prix.pourcentageRabais,
+      montantRabais: prix.montantRabais,
       date: nouvelleApplication.datePaiement,
       mois: getMonthKey(nouvelleApplication.datePaiement),
       note: `Paiement prévu - ${nouvelleApplication.nomApplication}`,
@@ -444,13 +538,15 @@ function Accueil() {
       return;
     }
 
+    const prix = calculerPrixAvecRabais(
+      applicationForm.montant,
+      applicationForm.rabaisBienvenue,
+      applicationForm.rabaisAnnuel
+    );
+
     const applicationsActuelles = Array.isArray(client.applications)
       ? client.applications
       : [];
-
-    const applicationAvant = applicationsActuelles.find(
-      (application) => application.id === applicationId
-    );
 
     const datePaiementFinale =
       applicationForm.datePaiement ||
@@ -464,7 +560,12 @@ function Accueil() {
         ...application,
         nomApplication: applicationForm.nomApplication.trim(),
         dateOuverture: applicationForm.dateOuverture || todayDate(),
-        montant: Number(applicationForm.montant || 0),
+        prixBase: prix.prixBase,
+        montant: prix.montantFinal,
+        rabaisBienvenue: prix.rabaisBienvenue,
+        rabaisAnnuel: prix.rabaisAnnuel,
+        pourcentageRabais: prix.pourcentageRabais,
+        montantRabais: prix.montantRabais,
         datePaiement: datePaiementFinale,
         recurrencePaiement: applicationForm.recurrencePaiement || "unique",
         updatedAtText: new Date().toISOString(),
@@ -492,7 +593,12 @@ function Accueil() {
           clientPersonne: client.personne || "",
           applicationId,
           applicationNom: applicationForm.nomApplication.trim(),
-          montant: Number(applicationForm.montant || 0),
+          prixBase: prix.prixBase,
+          montant: prix.montantFinal,
+          rabaisBienvenue: prix.rabaisBienvenue,
+          rabaisAnnuel: prix.rabaisAnnuel,
+          pourcentageRabais: prix.pourcentageRabais,
+          montantRabais: prix.montantRabais,
           date: datePaiementFinale,
           mois: getMonthKey(datePaiementFinale),
           note: `Paiement prévu - ${applicationForm.nomApplication.trim()}`,
@@ -501,23 +607,10 @@ function Accueil() {
         })
       )
     );
-
-    if (!applicationAvant) {
-      alert("Application modifiée, mais l’ancienne version n’a pas été retrouvée.");
-    }
   }
 
   async function creerFactureDepuisPaiement(paiement, occurrenceDate) {
     if (!paiement) return;
-
-    const today = todayDate();
-
-    if (occurrenceDate > today) {
-      alert(
-        "Ce paiement est dans le futur. Tu pourras créer la facture quand la date sera passée."
-      );
-      return;
-    }
 
     const factureExiste = factures.some(
       (facture) =>
@@ -544,6 +637,11 @@ function Accueil() {
       entreprise: paiement.clientEntreprise || paiement.client || "",
       personne: paiement.clientPersonne || client?.personne || "",
       montant: Number(paiement.montant || 0),
+      prixBase: Number(paiement.prixBase || paiement.montant || 0),
+      rabaisBienvenue: Boolean(paiement.rabaisBienvenue),
+      rabaisAnnuel: Boolean(paiement.rabaisAnnuel),
+      pourcentageRabais: Number(paiement.pourcentageRabais || 0),
+      montantRabais: Number(paiement.montantRabais || 0),
       date: occurrenceDate,
       mois: getMonthKey(occurrenceDate),
       description: paiement.applicationNom
@@ -560,6 +658,11 @@ function Accueil() {
       personne: paiement.clientPersonne || client?.personne || "",
       applicationNom: paiement.applicationNom || "",
       montant: Number(paiement.montant || 0),
+      prixBase: Number(paiement.prixBase || paiement.montant || 0),
+      rabaisBienvenue: Boolean(paiement.rabaisBienvenue),
+      rabaisAnnuel: Boolean(paiement.rabaisAnnuel),
+      pourcentageRabais: Number(paiement.pourcentageRabais || 0),
+      montantRabais: Number(paiement.montantRabais || 0),
       date: occurrenceDate,
       description: paiement.applicationNom
         ? `Application : ${paiement.applicationNom}`
@@ -607,50 +710,17 @@ function Accueil() {
     });
   }
 
-  async function ajouterPaiement(e) {
-    e.preventDefault();
-
-    if (!paiementForm.client.trim()) {
-      alert("Entre le client ou l’entreprise.");
-      return;
-    }
-
-    if (!paiementForm.montant || Number(paiementForm.montant) <= 0) {
-      alert("Entre un montant valide.");
-      return;
-    }
-
-    await addDoc(baseRef("paiements"), {
-      client: paiementForm.client.trim(),
-      montant: Number(paiementForm.montant),
-      date: paiementForm.date,
-      mois: getMonthKey(paiementForm.date),
-      note: paiementForm.note.trim(),
-      recurrence: paiementForm.recurrence,
-      moyenPaiement: paiementForm.moyenPaiement.trim(),
-      statutPaiement: "Reçu",
-      automatique: false,
-      source: "manuel",
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-
-    setPaiementForm({
-      client: "",
-      montant: "",
-      date: todayDate(),
-      note: "",
-      recurrence: "unique",
-      moyenPaiement: "",
-    });
-  }
-
   function fillFactureFromClient(client, application = null) {
     setFacturePreview({
       entreprise: client?.entreprise || "Nom de l’entreprise",
       personne: client?.personne || "Nom de la personne",
       applicationNom: application?.nomApplication || "Application / service",
       montant: application?.montant || 0,
+      prixBase: application?.prixBase || application?.montant || 0,
+      rabaisBienvenue: Boolean(application?.rabaisBienvenue),
+      rabaisAnnuel: Boolean(application?.rabaisAnnuel),
+      pourcentageRabais: Number(application?.pourcentageRabais || 0),
+      montantRabais: Number(application?.montantRabais || 0),
       date: application?.datePaiement || todayDate(),
       description: application?.nomApplication
         ? `Application : ${application.nomApplication}`
@@ -682,15 +752,13 @@ function Accueil() {
     setFacturePreview,
     depenseForm,
     setDepenseForm,
-    paiementForm,
-    setPaiementForm,
     ajouterClient,
     ajouterApplicationClient,
     modifierApplicationClient,
     creerFactureDepuisPaiement,
     ajouterDepense,
-    ajouterPaiement,
     fillFactureFromClient,
+    fermerClient,
   };
 
   return (
@@ -729,177 +797,203 @@ function Accueil() {
           font-family: Arial, sans-serif;
         }
 
-        .sidebar {
-          background: linear-gradient(180deg, #0f172a 0%, #111c36 55%, #102a55 100%);
-          color: white;
-          padding: 22px;
-          display: flex;
-          flex-direction: column;
-          gap: 22px;
-          position: sticky;
-          top: 0;
-          height: 100vh;
-          box-shadow: 12px 0 30px rgba(15, 23, 42, 0.18);
-          z-index: 10;
-        }
-
-        .brand {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding-bottom: 18px;
-          border-bottom: 1px solid rgba(255,255,255,0.14);
-        }
-
-        .brand-logo {
-          width: 50px;
-          height: 50px;
-          border-radius: 17px;
-          background: linear-gradient(135deg, #2563eb, #38bdf8);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-weight: 900;
-          font-size: 1.08rem;
-          box-shadow: 0 12px 24px rgba(37, 99, 235, 0.35);
-        }
-
-        .brand h1 {
-          margin: 0;
-          font-size: 1.08rem;
-          line-height: 1.15;
-          letter-spacing: -0.02em;
-        }
-
-        .brand p {
-          margin: 4px 0 0;
-          color: #cbd5e1;
-          font-size: 0.86rem;
-        }
-
-        .menu {
-          display: grid;
-          gap: 9px;
-        }
-
-        .menu button {
-          border: 1px solid transparent;
-          background: transparent;
-          color: #dbeafe;
-          text-align: left;
-          padding: 12px 14px;
-          border-radius: 14px;
-          font-weight: 800;
-          cursor: pointer;
-          font-size: 0.95rem;
-          transition: 0.16s ease;
-        }
-
-        .menu button:hover {
-          background: rgba(255,255,255,0.08);
-          border-color: rgba(255,255,255,0.12);
-          color: white;
-        }
-
-        .menu button.active {
-          background: #ffffff;
-          color: #0f172a;
-          box-shadow: 0 10px 22px rgba(0,0,0,0.18);
-        }
-
-        .sidebar-note {
-          margin-top: auto;
-          background: rgba(255,255,255,0.09);
-          border: 1px solid rgba(255,255,255,0.14);
-          border-radius: 18px;
-          padding: 16px;
-        }
-
-        .sidebar-note p {
-          margin: 0 0 6px;
-          color: #cbd5e1;
-          font-size: 0.88rem;
-        }
-
-        .sidebar-note strong {
-          font-size: 0.92rem;
-          word-break: break-word;
-          color: white;
-        }
-
         .main {
           width: 100%;
           max-width: none;
-          padding: 24px;
+          padding: 22px;
           overflow: auto;
         }
 
-        .topbar {
+        .page-header {
           display: flex;
-          justify-content: space-between;
           align-items: center;
+          justify-content: space-between;
           gap: 16px;
-          margin-bottom: 22px;
-          background: white;
-          border: 1px solid #dbe6f5;
-          border-radius: 26px;
-          padding: 22px;
-          box-shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
+          margin-bottom: 16px;
         }
 
-        .topbar h2 {
+        .page-title-actions {
+          display: inline-flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .page-header h2 {
           margin: 0;
-          font-size: clamp(1.8rem, 3vw, 2.75rem);
+          font-size: 1.85rem;
           color: #0f172a;
-          letter-spacing: -0.045em;
+          letter-spacing: -0.04em;
         }
 
-        .topbar p {
-          margin: 8px 0 0;
-          color: #64748b;
-          font-size: 1rem;
-          font-weight: 600;
+        .refresh-btn {
+          border: 1px solid #dbe6f5;
+          border-radius: 999px;
+          background: rgba(255, 255, 255, 0.78);
+          color: #334155;
+          min-height: 38px;
+          padding: 0 13px;
+          font-size: 0.82rem;
+          font-weight: 900;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          box-shadow: 0 10px 24px rgba(15, 23, 42, 0.055);
+          transition: 0.16s ease;
+          font-family: inherit;
+          white-space: nowrap;
         }
 
-        .month-picker {
+        .refresh-btn:hover {
           background: #f8fbff;
+          border-color: #93c5fd;
+          color: #1d4ed8;
+          transform: translateY(-1px);
+        }
+
+        .refresh-btn-icon {
+          width: 22px;
+          height: 22px;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: #eff6ff;
+          color: #1d4ed8;
+          font-size: 0.9rem;
+          font-weight: 900;
+        }
+
+        .header-actions {
+          display: inline-flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+        }
+
+        .header-action-buttons {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          background: rgba(255, 255, 255, 0.72);
           border: 1px solid #dbe6f5;
           border-radius: 18px;
-          padding: 13px 15px;
-          display: grid;
-          gap: 6px;
-          min-width: 175px;
+          padding: 6px;
+          box-shadow: 0 10px 24px rgba(15, 23, 42, 0.055);
+          backdrop-filter: blur(8px);
         }
 
-        .month-picker label {
-          font-size: 0.72rem;
+        .header-mini-btn {
+          border: 1px solid #dbeafe;
+          border-radius: 14px;
+          background: #f8fbff;
+          color: #1e3a8a;
+          min-height: 40px;
+          padding: 0 13px;
+          font-size: 0.82rem;
           font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-          color: #2563eb;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          transition: 0.16s ease;
+          white-space: nowrap;
+          font-family: inherit;
         }
 
-        .month-picker input {
-          border: none;
+        .header-mini-btn:hover {
+          background: #eff6ff;
+          border-color: #93c5fd;
+          color: #1d4ed8;
+          transform: translateY(-1px);
+        }
+
+        .header-mini-btn.install {
+          color: #92400e;
+          background: #fffbeb;
+          border-color: #fde68a;
+        }
+
+        .header-mini-btn.install:hover {
+          background: #fef3c7;
+          border-color: #f59e0b;
+        }
+
+        .header-mini-btn.notify {
+          color: #065f46;
+          background: #ecfdf5;
+          border-color: #a7f3d0;
+        }
+
+        .header-mini-btn.notify:hover {
+          background: #d1fae5;
+          border-color: #34d399;
+        }
+
+        .header-mini-icon {
+          width: 22px;
+          height: 22px;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(15, 23, 42, 0.08);
+          font-size: 0.82rem;
+        }
+
+        .year-nav {
+          display: inline-flex;
+          align-items: center;
+          gap: 10px;
+          background: white;
+          border: 1px solid #dbe6f5;
+          border-radius: 18px;
+          padding: 8px;
+          box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+        }
+
+        .year-nav h1 {
+          margin: 0;
+          min-width: 128px;
+          text-align: center;
+          color: #0f172a;
+          font-size: 1.35rem;
+          line-height: 1;
+          letter-spacing: -0.035em;
+        }
+
+        .year-btn {
+          border: 1px solid #bfdbfe;
+          border-radius: 13px;
+          background: #eff6ff;
+          color: #1d4ed8;
+          width: 40px;
+          height: 40px;
           font-weight: 900;
-          color: #111827;
-          font-size: 1rem;
-          outline: none;
-          background: transparent;
+          cursor: pointer;
+          font-size: 1.25rem;
+        }
+
+        .year-btn:hover {
+          background: #dbeafe;
         }
 
         .stats-grid {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 16px;
-          margin-bottom: 22px;
+          gap: 14px;
+          margin-bottom: 14px;
         }
 
         .stat-card {
           background: white;
-          border-radius: 22px;
-          padding: 22px;
-          box-shadow: 0 12px 26px rgba(15, 23, 42, 0.07);
+          border-radius: 20px;
+          padding: 18px 20px;
+          box-shadow: 0 10px 24px rgba(15, 23, 42, 0.07);
           border: 1px solid #dbe6f5;
           position: relative;
           overflow: hidden;
@@ -925,19 +1019,19 @@ function Accueil() {
           margin: 0;
           color: #475569;
           font-weight: 900;
-          font-size: 0.9rem;
+          font-size: 0.86rem;
         }
 
         .stat-card h3 {
-          margin: 10px 0 5px;
+          margin: 9px 0 4px;
           color: #0f172a;
-          font-size: 2.08rem;
+          font-size: 1.85rem;
           letter-spacing: -0.04em;
         }
 
         .stat-card span {
           color: #64748b;
-          font-size: 0.88rem;
+          font-size: 0.82rem;
           font-weight: 700;
         }
 
@@ -949,25 +1043,179 @@ function Accueil() {
           color: #dc2626;
         }
 
-        .grid-2 {
+        .month-strip-wrap {
+          margin-bottom: 18px;
+          background: white;
+          border: 1px solid #dbe6f5;
+          border-radius: 20px;
+          padding: 12px;
+          box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+        }
+
+        .month-strip {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          grid-template-columns: repeat(12, minmax(0, 1fr));
+          gap: 7px;
+          width: 100%;
+        }
+
+        .month-tab {
+          border: 1px solid #dbe6f5;
+          background: #f8fbff;
+          color: #334155;
+          border-radius: 13px;
+          padding: 11px 6px;
+          font-weight: 900;
+          cursor: pointer;
+          text-align: center;
+          font-size: 0.86rem;
+          transition: 0.16s ease;
+        }
+
+        .month-tab:hover {
+          border-color: #2563eb;
+          background: #eff6ff;
+          color: #1d4ed8;
+        }
+
+        .month-tab.active {
+          background: #2563eb;
+          color: white;
+          border-color: #2563eb;
+          box-shadow: 0 8px 16px rgba(37, 99, 235, 0.22);
+        }
+
+        .home-layout {
+          display: grid;
+          grid-template-columns: 320px minmax(0, 1fr);
           gap: 18px;
+          align-items: start;
         }
 
         .panel {
           background: white;
-          border-radius: 24px;
-          padding: 22px;
-          box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+          border-radius: 22px;
+          padding: 20px;
+          box-shadow: 0 10px 24px rgba(15, 23, 42, 0.07);
           border: 1px solid #dbe6f5;
         }
 
         .panel h3 {
-          margin: 0 0 16px;
-          font-size: 1.35rem;
+          margin: 0 0 14px;
+          font-size: 1.18rem;
           color: #0f172a;
           letter-spacing: -0.025em;
+        }
+
+        .summary-simple {
+          display: grid;
+          gap: 10px;
+        }
+
+        .summary-line {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          border: 1px solid #e2e8f0;
+          background: #f8fbff;
+          border-radius: 15px;
+          padding: 13px;
+        }
+
+        .summary-line strong {
+          color: #0f172a;
+          font-size: 0.95rem;
+        }
+
+        .amount {
+          font-weight: 900;
+          color: #0f172a;
+          white-space: nowrap;
+          font-size: 1rem;
+        }
+
+        .summary-line.total {
+          background: #0f172a;
+          border-color: #0f172a;
+        }
+
+        .summary-line.total strong,
+        .summary-line.total .amount {
+          color: white;
+        }
+
+        .summary-line.total.positive {
+          background: #047857;
+          border-color: #047857;
+        }
+
+        .summary-line.total.danger {
+          background: #dc2626;
+          border-color: #dc2626;
+        }
+
+        .home-details-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 14px;
+        }
+
+        .home-mini-table-wrap {
+          border: 1px solid #dbe6f5;
+          border-radius: 16px;
+          overflow: hidden;
+          background: white;
+        }
+
+        .home-mini-title {
+          margin: 0;
+          padding: 12px 14px;
+          background: #f8fbff;
+          border-bottom: 1px solid #dbe6f5;
+          font-size: 0.95rem;
+          font-weight: 900;
+          color: #0f172a;
+        }
+
+        .home-mini-table {
+          width: 100%;
+          border-collapse: collapse;
+        }
+
+        .home-mini-table th {
+          background: #f1f5f9;
+          color: #334155;
+          text-align: left;
+          padding: 8px 10px;
+          font-size: 0.72rem;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          border-bottom: 1px solid #dbe3ef;
+        }
+
+        .home-mini-table td {
+          padding: 8px 10px;
+          border-bottom: 1px solid #e5e7eb;
+          color: #0f172a;
+          font-size: 0.86rem;
+          vertical-align: middle;
+          line-height: 1.2;
+        }
+
+        .home-mini-table tr:last-child td {
+          border-bottom: none;
+        }
+
+        .home-mini-muted {
+          color: #64748b;
+          font-weight: 650;
+        }
+
+        .grid-2 {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          gap: 18px;
         }
 
         .panel-subtitle {
@@ -1037,11 +1285,6 @@ function Accueil() {
           box-shadow: 0 10px 20px rgba(37, 99, 235, 0.22);
         }
 
-        .primary-btn:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 14px 24px rgba(37, 99, 235, 0.28);
-        }
-
         .secondary-btn {
           border: 1px solid #bfdbfe;
           border-radius: 12px;
@@ -1052,14 +1295,9 @@ function Accueil() {
           cursor: pointer;
         }
 
-        .secondary-btn:hover {
-          background: #dbeafe;
-        }
-
         .secondary-btn:disabled {
           opacity: 0.45;
           cursor: not-allowed;
-          transform: none;
         }
 
         .danger-btn {
@@ -1070,43 +1308,6 @@ function Accueil() {
           padding: 10px 13px;
           font-weight: 900;
           cursor: pointer;
-        }
-
-        .list {
-          display: grid;
-          gap: 10px;
-        }
-
-        .item {
-          border: 1px solid #e2e8f0;
-          background: #f8fbff;
-          border-radius: 18px;
-          padding: 15px;
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          gap: 12px;
-        }
-
-        .item strong {
-          display: block;
-          color: #0f172a;
-          margin-bottom: 4px;
-        }
-
-        .item p {
-          margin: 0;
-          color: #64748b;
-          font-size: 0.92rem;
-          line-height: 1.38;
-          font-weight: 600;
-        }
-
-        .amount {
-          font-weight: 900;
-          color: #0f172a;
-          white-space: nowrap;
-          font-size: 1rem;
         }
 
         .badge-row {
@@ -1153,89 +1354,14 @@ function Accueil() {
         }
 
         .empty {
-          padding: 18px;
+          padding: 14px;
           border: 1px dashed #cbd5e1;
-          border-radius: 16px;
+          border-radius: 14px;
           color: #64748b;
           background: #f8fafc;
           text-align: center;
           font-weight: 800;
-        }
-
-        .invoice-preview {
-          border: 1px solid #dbe6f5;
-          border-radius: 20px;
-          padding: 22px;
-          background: #f8fbff;
-        }
-
-        .invoice-preview-header {
-          display: flex;
-          justify-content: space-between;
-          gap: 16px;
-          border-bottom: 2px solid #0f172a;
-          padding-bottom: 16px;
-          margin-bottom: 18px;
-        }
-
-        .invoice-preview h4 {
-          margin: 0;
-          font-size: 1.4rem;
-          color: #0f172a;
-        }
-
-        .invoice-preview p {
-          margin: 5px 0;
-          color: #475569;
-        }
-
-        .invoice-total {
-          margin-top: 18px;
-          padding-top: 14px;
-          border-top: 1px solid #cbd5e1;
-          display: flex;
-          justify-content: space-between;
-          font-size: 1.25rem;
-          font-weight: 900;
-          color: #0f172a;
-        }
-
-        .dashboard-actions {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 14px;
-          margin-bottom: 22px;
-        }
-
-        .quick-btn {
-          border: 1px solid #dbe6f5;
-          background: white;
-          border-radius: 20px;
-          padding: 18px;
-          text-align: left;
-          cursor: pointer;
-          box-shadow: 0 10px 22px rgba(15, 23, 42, 0.06);
-          transition: 0.16s ease;
-        }
-
-        .quick-btn:hover {
-          border-color: #2563eb;
-          transform: translateY(-2px);
-          box-shadow: 0 16px 28px rgba(15, 23, 42, 0.1);
-        }
-
-        .quick-btn strong {
-          display: block;
-          color: #0f172a;
-          margin-bottom: 6px;
-          font-size: 1rem;
-        }
-
-        .quick-btn span {
-          color: #64748b;
-          line-height: 1.35;
           font-size: 0.9rem;
-          font-weight: 600;
         }
 
         .section-header {
@@ -1281,16 +1407,6 @@ function Accueil() {
           border-bottom: 1px solid #e5e7eb;
           vertical-align: top;
           color: #0f172a;
-        }
-
-        .data-table tr:hover td {
-          background: #f8fbff;
-        }
-
-        .table-actions {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
         }
 
         .modal-overlay {
@@ -1360,152 +1476,57 @@ function Accueil() {
           margin-top: 16px;
         }
 
-        .client-detail-grid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 18px;
-        }
-
-        .client-profile {
-          background: linear-gradient(135deg, #eff6ff, #f8fbff);
-          border: 1px solid #bfdbfe;
-          border-radius: 22px;
-          padding: 18px;
-          margin-bottom: 18px;
-          display: grid;
-          gap: 8px;
-        }
-
-        .client-profile h4 {
-          margin: 0;
-          color: #0f172a;
-          font-size: 1.15rem;
-        }
-
-        .client-profile p {
-          margin: 0;
-          color: #475569;
-          font-weight: 700;
-        }
-
-        .detail-toolbar {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 12px;
-          margin-bottom: 14px;
-        }
-
-        .detail-toolbar h3 {
-          margin: 0;
-        }
-
-        .application-card {
+        .invoice-preview {
           border: 1px solid #dbe6f5;
-          background: white;
-          border-radius: 18px;
-          padding: 15px;
-          display: grid;
-          gap: 10px;
+          border-radius: 20px;
+          padding: 22px;
+          background: #f8fbff;
         }
 
-        .application-card-header {
+        .invoice-preview-header {
           display: flex;
           justify-content: space-between;
-          gap: 12px;
-          align-items: flex-start;
+          gap: 16px;
+          border-bottom: 2px solid #0f172a;
+          padding-bottom: 16px;
+          margin-bottom: 18px;
         }
 
-        .application-card h4 {
+        .invoice-preview h4 {
           margin: 0;
+          font-size: 1.4rem;
           color: #0f172a;
-          font-size: 1.02rem;
         }
 
-        .application-card p {
-          margin: 3px 0 0;
-          color: #64748b;
-          font-weight: 600;
+        .invoice-preview p {
+          margin: 5px 0;
+          color: #475569;
         }
 
-        .payment-card {
-          border-radius: 18px;
-          padding: 15px;
-          display: grid;
-          gap: 10px;
-          border: 1px solid #cbd5e1;
-          background: #0f172a;
-          color: white;
-        }
-
-        .payment-card p,
-        .payment-card strong,
-        .payment-card h4 {
-          color: white;
-        }
-
-        .payment-card .muted {
-          color: #cbd5e1;
-        }
-
-        .payment-card.future {
-          background: #fffbeb;
-          border-color: #fbbf24;
-          color: #78350f;
-        }
-
-        .payment-card.future p,
-        .payment-card.future strong,
-        .payment-card.future h4 {
-          color: #78350f;
-        }
-
-        .payment-card.future .muted {
-          color: #92400e;
-        }
-
-        .payment-card.invoiced {
-          background: #f0fdf4;
-          border-color: #86efac;
-          color: #14532d;
-        }
-
-        .payment-card.invoiced p,
-        .payment-card.invoiced strong,
-        .payment-card.invoiced h4 {
-          color: #14532d;
-        }
-
-        .payment-card.invoiced .muted {
-          color: #166534;
-        }
-
-        .payment-card-header {
+        .invoice-total {
+          margin-top: 18px;
+          padding-top: 14px;
+          border-top: 1px solid #cbd5e1;
           display: flex;
           justify-content: space-between;
-          gap: 12px;
-          align-items: flex-start;
-        }
-
-        .payment-card h4 {
-          margin: 0;
-          font-size: 1.02rem;
-        }
-
-        .payment-card p {
-          margin: 4px 0 0;
-          font-weight: 650;
+          font-size: 1.25rem;
+          font-weight: 900;
+          color: #0f172a;
         }
 
         @media (max-width: 1150px) {
-          .stats-grid,
-          .dashboard-actions {
+          .stats-grid {
             grid-template-columns: repeat(2, 1fr);
           }
 
           .grid-2,
-          .client-detail-grid {
+          .home-layout,
+          .home-details-grid {
             grid-template-columns: 1fr;
+          }
+
+          .month-strip {
+            grid-template-columns: repeat(6, minmax(0, 1fr));
           }
         }
 
@@ -1514,18 +1535,44 @@ function Accueil() {
             grid-template-columns: 1fr;
           }
 
-          .sidebar {
-            position: relative;
-            height: auto;
-          }
-
-          .menu {
-            grid-template-columns: repeat(2, 1fr);
-          }
-
-          .topbar {
+          .page-header {
             align-items: flex-start;
             flex-direction: column;
+          }
+
+          .page-title-actions {
+            width: 100%;
+            justify-content: space-between;
+          }
+
+          .refresh-btn {
+            min-height: 36px;
+            padding: 0 11px;
+          }
+
+          .header-actions {
+            width: 100%;
+            justify-content: space-between;
+          }
+
+          .header-action-buttons {
+            width: 100%;
+            justify-content: space-between;
+          }
+
+          .header-mini-btn {
+            flex: 1;
+            justify-content: center;
+          }
+
+          .year-nav {
+            width: 100%;
+            justify-content: space-between;
+          }
+
+          .year-nav h1 {
+            min-width: 0;
+            flex: 1;
           }
 
           .main {
@@ -1533,17 +1580,19 @@ function Accueil() {
           }
 
           .stats-grid,
-          .dashboard-actions,
           .form-row {
             grid-template-columns: 1fr;
+          }
+
+          .month-strip {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
           }
 
           .modal {
             padding: 18px;
           }
 
-          .section-header,
-          .detail-toolbar {
+          .section-header {
             align-items: flex-start;
             flex-direction: column;
           }
@@ -1551,226 +1600,240 @@ function Accueil() {
       `}</style>
 
       <div className="app-compta">
-        <aside className="sidebar">
-          <div className="brand">
-            <div className="brand-logo">JS</div>
-            <div>
-              <h1>Jolab Solutions</h1>
-              <p>Comptabilité</p>
-            </div>
-          </div>
-
-          <nav className="menu">
-            <button
-              className={page === "accueil" ? "active" : ""}
-              onClick={() => setPage("accueil")}
-            >
-              Accueil
-            </button>
-
-            <button
-              className={page === "clients" ? "active" : ""}
-              onClick={() => setPage("clients")}
-            >
-              Clients
-            </button>
-
-            <button
-              className={page === "factures" ? "active" : ""}
-              onClick={() => setPage("factures")}
-            >
-              Factures
-            </button>
-
-            <button
-              className={page === "depenses" ? "active" : ""}
-              onClick={() => setPage("depenses")}
-            >
-              Dépenses
-            </button>
-
-            <button
-              className={page === "paiements" ? "active" : ""}
-              onClick={() => setPage("paiements")}
-            >
-              Paiements
-            </button>
-
-            <button
-              className={page === "resume" ? "active" : ""}
-              onClick={() => setPage("resume")}
-            >
-              Résumé
-            </button>
-          </nav>
-
-          <div className="sidebar-note">
-            <p>Données Firestore</p>
-            <strong>apps / jolab-solutions-comptabilite</strong>
-          </div>
-        </aside>
+        <SidebarCompta page={page} setPage={setPage} />
 
         <main className="main">
-          <div className="topbar">
-            <div>
+          <div className="page-header">
+            <div className="page-title-actions">
               <h2>Suivi travailleur autonome</h2>
-              <p>
-                Clients, factures, dépenses, paiements passés et paiements
-                futurs au même endroit.
-              </p>
+
+              <button
+                className="refresh-btn"
+                type="button"
+                onClick={actualiserApplication}
+                title="Actualiser l’application"
+              >
+                <span className="refresh-btn-icon">↻</span>
+                <span>Actualiser</span>
+              </button>
             </div>
 
-            <div className="month-picker">
-              <label>Mois affiché</label>
-              <input
-                type="month"
-                value={moisActif}
-                onChange={(e) => setMoisActif(e.target.value)}
-              />
-            </div>
+            {page === "accueil" && (
+              <div className="header-actions">
+                <div className="header-action-buttons">
+                  <InstallerApplication compact />
+                  <BoutonNotifications compact />
+                </div>
+
+                <div className="year-nav">
+                  <button
+                    className="year-btn"
+                    onClick={() => changerAnnee(-1)}
+                    type="button"
+                  >
+                    ‹
+                  </button>
+
+                  <h1>Année {stats.anneeActive}</h1>
+
+                  <button
+                    className="year-btn"
+                    onClick={() => changerAnnee(1)}
+                    type="button"
+                  >
+                    ›
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-
-          <section className="stats-grid">
-            <div className="stat-card positive">
-              <p>Paiements de l’année complète</p>
-              <h3>{money(stats.totalPaiementsAnnee)}</h3>
-              <span>
-                Passés et futurs · {stats.paiementsAnnee.length} paiement(s) en{" "}
-                {stats.anneeActive}
-              </span>
-            </div>
-
-            <div className="stat-card danger">
-              <p>Dépenses de l’année complète</p>
-              <h3>{money(stats.totalDepensesAnnee)}</h3>
-              <span>
-                Passées et futures · {stats.depensesAnnee.length} dépense(s) en{" "}
-                {stats.anneeActive}
-              </span>
-            </div>
-
-            <div
-              className={`stat-card ${
-                stats.profitAnnee >= 0 ? "positive" : "danger"
-              }`}
-            >
-              <p>Profit estimé annuel</p>
-              <h3>{money(stats.profitAnnee)}</h3>
-              <span>Prévision globale de {stats.anneeActive}</span>
-            </div>
-          </section>
 
           {page === "accueil" && (
             <>
-              <section className="dashboard-actions">
-                <button className="quick-btn" onClick={() => setPage("clients")}>
-                  <strong>Ajouter un client</strong>
-                  <span>Créer une fiche client et suivre ses applications.</span>
-                </button>
-
-                <button
-                  className="quick-btn"
-                  onClick={() => setPage("factures")}
-                >
-                  <strong>Voir les factures</strong>
-                  <span>Aperçu de facture et historique par client.</span>
-                </button>
-
-                <button
-                  className="quick-btn"
-                  onClick={() => setPage("depenses")}
-                >
-                  <strong>Ajouter une dépense</strong>
-                  <span>Suivre les dépenses passées et futures.</span>
-                </button>
-
-                <button
-                  className="quick-btn"
-                  onClick={() => setPage("paiements")}
-                >
-                  <strong>Ajouter un paiement</strong>
-                  <span>Inscrire un paiement reçu ou prévu.</span>
-                </button>
-              </section>
-
-              <section className="grid-2">
-                <div className="panel">
-                  <h3>Dernières factures</h3>
-
-                  <div className="list">
-                    {factures.slice(0, 6).map((item) => (
-                      <div className="item" key={item.id}>
-                        <div>
-                          <strong>{item.entreprise}</strong>
-                          <p>
-                            {item.personne || "Aucun contact"} · {item.date}
-                          </p>
-                          {item.applicationNom && (
-                            <p>
-                              Application : {item.applicationNom} ·{" "}
-                              {recurrenceLabel(
-                                item.applicationRecurrencePaiement
-                              )}
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="amount">{money(item.montant)}</div>
-                      </div>
-                    ))}
-
-                    {factures.length === 0 && (
-                      <div className="empty">Aucune facture créée.</div>
-                    )}
-                  </div>
+              <section className="stats-grid">
+                <div className="stat-card positive">
+                  <p>Paiements de l’année complète</p>
+                  <h3>{money(stats.totalPaiementsAnnee)}</h3>
+                  <span>{stats.paiementsAnnee.length} paiement(s)</span>
                 </div>
 
-                <div className="panel">
-                  <h3>Résumé du mois complet</h3>
+                <div className="stat-card danger">
+                  <p>Dépenses de l’année complète</p>
+                  <h3>{money(stats.totalDepensesAnnee)}</h3>
+                  <span>{stats.depensesAnnee.length} dépense(s)</span>
+                </div>
 
-                  <div className="list">
-                    <div className="item">
-                      <div>
-                        <strong>Total reçu / prévu</strong>
-                        <p>Paiements passés et futurs du mois sélectionné.</p>
-                      </div>
+                <div
+                  className={`stat-card ${
+                    stats.profitAnnee >= 0 ? "positive" : "danger"
+                  }`}
+                >
+                  <p>Profit estimé annuel</p>
+                  <h3>{money(stats.profitAnnee)}</h3>
+                  <span>{stats.anneeActive}</span>
+                </div>
+              </section>
+
+              <div className="month-strip-wrap">
+                <div className="month-strip">
+                  {moisDisponibles.map((monthKey) => (
+                    <button
+                      key={monthKey}
+                      type="button"
+                      className={`month-tab ${
+                        moisActif === monthKey ? "active" : ""
+                      }`}
+                      onClick={() => setMoisActif(monthKey)}
+                    >
+                      {monthNameFromKey(monthKey)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="home-layout">
+                <section className="panel">
+                  <h3>Résumé du mois</h3>
+
+                  <div className="summary-simple">
+                    <div className="summary-line">
+                      <strong>Paiement :</strong>
                       <div className="amount">{money(stats.totalPaiements)}</div>
                     </div>
 
-                    <div className="item">
-                      <div>
-                        <strong>À recevoir</strong>
-                        <p>Factures du mois moins paiements du mois.</p>
-                      </div>
-                      <div className="amount">{money(stats.aRecevoir)}</div>
-                    </div>
-
-                    <div className="item">
-                      <div>
-                        <strong>Dépenses</strong>
-                        <p>Dépenses passées et futures du mois sélectionné.</p>
-                      </div>
+                    <div className="summary-line">
+                      <strong>Dépense :</strong>
                       <div className="amount">{money(stats.totalDepenses)}</div>
                     </div>
 
-                    <div className="item">
-                      <div>
-                        <strong>Profit estimé</strong>
-                        <p>Paiements moins dépenses pour tout le mois.</p>
-                      </div>
+                    <div
+                      className={`summary-line total ${
+                        stats.profit >= 0 ? "positive" : "danger"
+                      }`}
+                    >
+                      <strong>Total :</strong>
                       <div className="amount">{money(stats.profit)}</div>
                     </div>
                   </div>
-                </div>
-              </section>
+                </section>
+
+                <section className="panel">
+                  <div className="home-details-grid">
+                    <div className="home-mini-table-wrap">
+                      <h3 className="home-mini-title">Paiements</h3>
+
+                      <table className="home-mini-table">
+                        <thead>
+                          <tr>
+                            <th>Client</th>
+                            <th>Application</th>
+                            <th>Montant</th>
+                          </tr>
+                        </thead>
+
+                        <tbody>
+                          {stats.paiementsMois.map((item) => (
+                            <tr
+                              key={`${item.id}-${
+                                item.occurrenceDate || item.date
+                              }`}
+                            >
+                              <td>
+                                <strong>
+                                  {item.clientEntreprise ||
+                                    item.client ||
+                                    "Sans client"}
+                                </strong>
+                              </td>
+
+                              <td>
+                                <span className="home-mini-muted">
+                                  {item.applicationNom || item.note || "-"}
+                                </span>
+                              </td>
+
+                              <td>
+                                <strong>{money(item.montant)}</strong>
+                              </td>
+                            </tr>
+                          ))}
+
+                          {stats.paiementsMois.length === 0 && (
+                            <tr>
+                              <td colSpan="3">
+                                <div className="empty">Aucun paiement.</div>
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="home-mini-table-wrap">
+                      <h3 className="home-mini-title">Dépenses</h3>
+
+                      <table className="home-mini-table">
+                        <thead>
+                          <tr>
+                            <th>Dépense</th>
+                            <th>Info</th>
+                            <th>Montant</th>
+                          </tr>
+                        </thead>
+
+                        <tbody>
+                          {stats.depensesMois.map((item) => (
+                            <tr
+                              key={`${item.id}-${
+                                item.occurrenceDate || item.date
+                              }`}
+                            >
+                              <td>
+                                <strong>{item.titre || "-"}</strong>
+                              </td>
+
+                              <td>
+                                <span className="home-mini-muted">
+                                  {item.fournisseur || item.categorie || "-"}
+                                </span>
+                              </td>
+
+                              <td>
+                                <strong>{money(item.montant)}</strong>
+                              </td>
+                            </tr>
+                          ))}
+
+                          {stats.depensesMois.length === 0 && (
+                            <tr>
+                              <td colSpan="3">
+                                <div className="empty">Aucune dépense.</div>
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </section>
+              </div>
             </>
           )}
 
-          {page === "clients" && <Clients {...sharedProps} />}
+          {page === "clients" && (
+            <Clients
+              {...sharedProps}
+              clients={clients.filter((client) => !client.clientFerme)}
+            />
+          )}
+
           {page === "factures" && <Factures {...sharedProps} />}
           {page === "depenses" && <Depenses {...sharedProps} />}
-          {page === "paiements" && <Paiements {...sharedProps} />}
           {page === "resume" && <Resume {...sharedProps} />}
+
+          {page === "historique" && (
+            <HistoriqueClients {...sharedProps} clients={clients} />
+          )}
         </main>
       </div>
     </>
