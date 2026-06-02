@@ -795,6 +795,7 @@ function Accueil() {
           background: #eef3fb;
           color: #172033;
           font-family: Arial, sans-serif;
+          isolation: isolate;
         }
 
         .main {
@@ -802,6 +803,8 @@ function Accueil() {
           max-width: none;
           padding: 22px;
           overflow: auto;
+          position: relative;
+          z-index: 1;
         }
 
         .page-header {
@@ -810,6 +813,8 @@ function Accueil() {
           justify-content: space-between;
           gap: 16px;
           margin-bottom: 16px;
+          position: relative;
+          z-index: 20;
         }
 
         .page-title-actions {
@@ -872,6 +877,8 @@ function Accueil() {
           gap: 10px;
           flex-wrap: wrap;
           justify-content: flex-end;
+          position: relative;
+          z-index: 30;
         }
 
         .header-action-buttons {
@@ -884,6 +891,8 @@ function Accueil() {
           padding: 6px;
           box-shadow: 0 10px 24px rgba(15, 23, 42, 0.055);
           backdrop-filter: blur(8px);
+          position: relative;
+          z-index: 40;
         }
 
         .header-mini-btn {
@@ -1410,9 +1419,9 @@ function Accueil() {
         }
 
         .modal-overlay {
-          position: fixed;
-          inset: 0;
-          z-index: 1000;
+          position: fixed !important;
+          inset: 0 !important;
+          z-index: 2147483000 !important;
           background: rgba(15, 23, 42, 0.58);
           display: flex;
           align-items: center;
@@ -1430,6 +1439,8 @@ function Accueil() {
           box-shadow: 0 28px 80px rgba(15, 23, 42, 0.35);
           border: 1px solid #dbe6f5;
           padding: 24px;
+          position: relative;
+          z-index: 2147483001 !important;
         }
 
         .modal.large {
